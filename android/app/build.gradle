@@ -1,0 +1,57 @@
+plugins {
+    id 'com.android.application'
+}
+
+def ksFile = System.getenv('OP_KEYSTORE_FILE')
+
+android {
+    namespace 'com.granmaestro.officeportable'
+    compileSdk 35
+
+    defaultConfig {
+        applicationId 'com.granmaestro.officeportable'
+        minSdk 26
+        // 34 keeps the classic (non edge-to-edge) window so the keyboard resizes the editor.
+        targetSdk 34
+        versionCode Integer.parseInt(System.getenv('OP_VERSION_CODE') ?: '1')
+        versionName System.getenv('OP_VERSION_NAME') ?: '1.0.0'
+    }
+
+    signingConfigs {
+        release {
+            if (ksFile != null && new File(ksFile).exists()) {
+                storeFile file(ksFile)
+                storePassword System.getenv('OP_KEYSTORE_PASSWORD')
+                keyAlias System.getenv('OP_KEY_ALIAS')
+                keyPassword System.getenv('OP_KEY_PASSWORD')
+            }
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            signingConfig (ksFile != null && new File(ksFile).exists()) ? signingConfigs.release : signingConfigs.debug
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    androidResources {
+        // The default pattern drops files/dirs starting with "." or "_".
+        // The editor bundle has such files, so keep everything.
+        ignoreAssetsPattern '!.svn:!.git:!.ds_store:!*.scc:!CVS:!thumbs.db:!picasa.ini:!*~'
+    }
+
+    lint {
+        checkReleaseBuilds false
+        abortOnError false
+    }
+
+    packagingOptions {
+        jniLibs { useLegacyPackaging false }
+    }
+}

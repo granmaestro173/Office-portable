@@ -1,0 +1,28 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<meta name="color-scheme" content="light dark">
+<title>Office Portable</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #fff; }
+  @media (prefers-color-scheme: dark) { html, body { background: #1e2024; } #status { color: #a0a4aa; } }
+  #ed { border: 0; width: 100%; height: 100%; display: block; }
+  #status {
+    position: fixed; inset: 0; display: flex; flex-direction: column; gap: 14px;
+    align-items: center; justify-content: center; font: 15px system-ui, sans-serif; color: #5f6368;
+    pointer-events: none;
+  }
+  #status.hidden { display: none; }
+  .spin { width: 34px; height: 34px; border-radius: 50%; border: 3px solid #c9d6ea; border-top-color: #2b5797;
+          animation: s 0.9s linear infinite; }
+  @keyframes s { to { transform: rotate(360deg); } }
+</style>
+</head>
+<body>
+<iframe id="ed" allow="clipboard-read; clipboard-write; fullscreen"></iframe>
+<div id="status"><div class="spin"></div><div id="msg">Loading editor…</div></div>
+<script src="/__android/host.js"></script>
+</body>
+</html>

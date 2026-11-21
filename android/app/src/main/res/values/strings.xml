@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Office Portable</string>
+    <string name="create_new">Create new</string>
+    <string name="new_doc">Document</string>
+    <string name="new_sheet">Spreadsheet</string>
+    <string name="new_slides">Presentation</string>
+    <string name="open_file">Open a file</string>
+    <string name="open_hint">Word, Excel, PowerPoint, OpenDocument, RTF, CSV, TXT and PDF</string>
+    <string name="recent">Recent</string>
+    <string name="no_recent">Files you open will show up here.</string>
+    <string name="save">Save</string>
+    <string name="back">Back</string>
+    <string name="more">More options</string>
+</resources>
