@@ -40,6 +40,22 @@ Requires Android 8.0 or newer and an up-to-date **Android System WebView**
 On phones the editor uses ONLYOFFICE's desktop toolbar, adapted for narrow screens.
 It is roomiest on tablets or a phone in landscape.
 
+## Known limitations
+
+- **Spell check is off.** The upstream bundle disables it because its engine could
+  hang document loading.
+- **Phones get a dense toolbar.** Every editing feature is there, but buttons are
+  small. Landscape or a tablet works best.
+- **Macros** in `.docm`/`.xlsm` files are kept in neither the editor nor saved copies;
+  those files are saved as `.docx`/`.xlsx`.
+- **Some `.odp` files** fail to open with "Document conversion failed". This is a
+  converter limitation. Other `.odp` files open and save normally.
+- **Very large files** (hundreds of pages, or spreadsheets with hundreds of thousands
+  of cells) can exhaust the memory of low-end phones. The app then closes the editor
+  and tells you.
+- Unsaved edits are lost if Android kills the app in the background, so save before
+  switching away for long.
+
 ## How it works
 
 ```
@@ -58,13 +74,16 @@ EditorActivity (Java)
   [web-apps](https://github.com/ONLYOFFICE/web-apps) with the
   [x2t WebAssembly converter](https://github.com/cryptpad/onlyoffice-x2t-wasm).
   The exact version is pinned in `scripts/EDITOR_REF`.
+- `scripts/fill-font-faces.py` patches the bundle's font registry so substitute
+  fonts (Calibri → Carlito, ...) have bold and italic faces. Without it, bold body
+  text and Word headings render as garbled, shifted glyphs.
 
 ## Build
 
 GitHub Actions builds every push to `main` (`.github/workflows/build.yml`) and
 publishes the APK as a release.
 
-To build locally you need Node.js 24, pnpm 11, JDK 17 and the Android SDK:
+To build locally you need Node.js 24, pnpm 11, Python 3, JDK 17 and the Android SDK:
 
 ```bash
 ./scripts/build-editor.sh               # builds the editor into android/app/src/main/assets/www

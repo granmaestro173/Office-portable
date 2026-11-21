@@ -39,6 +39,12 @@ fs.writeFileSync(p, raw);
 console.log("x2t wasm decompressed:", raw.length, "bytes");
 ' "$OUT/sdkjs/common/wasm/x2t/x2t.wasm.br"
 
+# Give alias fonts (Calibri -> Carlito, ...) their bold/italic faces, otherwise
+# bold Calibri text and Word headings render as shifted, garbled glyphs.
+python3 -m pip install --quiet --disable-pip-version-check fonttools 2>/dev/null \
+  || python3 -m pip install --quiet --break-system-packages fonttools
+python3 "$ROOT/scripts/fill-font-faces.py" "$OUT"
+
 # Not needed inside the app.
 find "$OUT" -name '*.map' -delete
 rm -f "$OUT/_headers" "$OUT/_redirects" "$OUT/sw.js"

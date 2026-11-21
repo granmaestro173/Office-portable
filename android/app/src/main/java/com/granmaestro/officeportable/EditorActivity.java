@@ -206,8 +206,19 @@ public class EditorActivity extends Activity {
                 if (ext.isEmpty()) ext = FileTypes.ext(docName);
                 name = FileTypes.baseName(docName) + "." + ext;
             }
+            // The editor's own Save button / Ctrl+S arrives here as a download of the
+            // document's format. Treat it as the app's Save so it goes back to the file.
+            String own = FileTypes.editorExt(origExt);
+            String modern = FileTypes.modernExt(origExt);
+            if (ext.equals(own) || ext.equals(modern) || ext.equals(origExt)) {
+                ui.post(() -> save(false));
+                return;
+            }
+            if (saving) return;
             Job job = newJob("download", ext);
             job.suggestedName = name;
+            saving = true;
+            busy.setVisibility(View.VISIBLE);
             js("window.__op && window.__op.exportUrl(" + JSONObject.quote(job.id) + "," + JSONObject.quote(url) + ")");
         });
 
