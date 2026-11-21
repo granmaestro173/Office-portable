@@ -66,6 +66,37 @@ The app reduces that in three ways:
 - **One editor at a time on low-RAM phones.** All open editors share one WebView
   process, so opening a file closes other editors that have no unsaved changes.
 
+## Speed
+
+Measured with the editor in desktop Chrome at 6x CPU slowdown (roughly a
+low-end phone), not on a real device:
+
+- **Where open time goes.** A file is shown about 1 s after opening, but the
+  editor is busy for another 9-12 s before it's fully responsive. That time is
+  ONLYOFFICE's own JavaScript: building its toolbars (~3.5 s) and laying out the
+  document (~4.4 s). Script caching, starting the converter earlier and dropping
+  the spell checker were all measured and changed nothing, so the app doesn't
+  apply them.
+- **What the app does about it:**
+  - The editor runs in its own process (`:editor`). The home screen starts that
+    process and boots one editor shell in the background, so the WebView start-up
+    is already done when you open a file. The warm shell is dropped after 3 minutes
+    unused or when Android needs memory.
+  - The editor shell boots while the file is still being read and checked, not
+    after.
+  - File queries (name, size, permissions) run off the UI thread, so slow or cloud
+    storage can't freeze the screen.
+  - Saves go to the app as raw bytes, not base64, where the WebView supports it
+    (Chrome/WebView from about 2023). A 78 MB export took ~1.0 s instead of ~2.4 s
+    on the page side and sends 25% less data.
+  - The converter stays loaded 20 s after use (5 s on phones with 3 GB of RAM or
+    less). Restarting it costs ~0.6-0.9 s per save.
+- **PDFs open in a native viewer** (Android's PdfRenderer) with an **Edit** button
+  that switches to the full editor for annotating, filling or exporting.
+- **Saves survive switching apps.** A foreground notification and a high-priority
+  renderer keep the editor alive during a save. Pressing Back during a normal Save
+  finishes it in the background.
+
 ## Known limitations
 
 - **Spell check is off.** The upstream bundle disables it because its engine could
@@ -79,8 +110,8 @@ The app reduces that in three ways:
 - **Very large files** (hundreds of pages, or spreadsheets with hundreds of thousands
   of cells) can still exhaust the memory of low-end phones. The app then closes the
   editor and tells you.
-- Unsaved edits are lost if Android kills the app in the background, so save before
-  switching away for long.
+- Unsaved edits are lost if Android kills the editor in the background, so save
+  before switching away for long. A save that's already running is protected.
 
 ## How it works
 
