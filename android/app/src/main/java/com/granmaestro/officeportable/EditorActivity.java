@@ -1,16 +1,13 @@
 package com.granmaestro.officeportable;
 
-import android.annotation.SuppressLint;
 import android.app.Activity;
 import android.app.AlertDialog;
 import android.content.ActivityNotFoundException;
 import android.content.Intent;
-import android.content.pm.ApplicationInfo;
 import android.content.pm.PackageInfo;
 import android.content.pm.PackageManager;
 import android.database.Cursor;
 import android.net.Uri;
-import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
@@ -18,17 +15,17 @@ import android.provider.OpenableColumns;
 import android.util.Base64;
 import android.util.Log;
 import android.view.View;
+import android.view.ViewGroup;
 import android.webkit.ConsoleMessage;
-import android.webkit.JavascriptInterface;
+import android.webkit.RenderProcessGoneDetail;
 import android.webkit.URLUtil;
 import android.webkit.ValueCallback;
 import android.webkit.WebChromeClient;
 import android.webkit.WebResourceRequest;
 import android.webkit.WebResourceResponse;
-import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
-import android.webkit.RenderProcessGoneDetail;
+import android.widget.FrameLayout;
 import android.widget.PopupMenu;
 import android.widget.ProgressBar;
 import android.widget.TextView;
@@ -43,25 +40,40 @@ import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.lang.ref.WeakReference;
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
+/**
+ * Hosts the ONLYOFFICE editor. Runs in the ":editor" process (see the manifest),
+ * so the home screen and the PDF viewer are unaffected by the editor's memory use.
+ */
 public class EditorActivity extends Activity {
     static final String EXTRA_NEW = "new_type";
     private static final String TAG = "OfficePortable";
 
     private static final int REQ_CREATE = 10;
     private static final int REQ_FILE_CHOOSER = 11;
+    private static final int REQ_SHARE_TARGET = 12;
+
+    /** Files at least this big are copied and checked for oversized photos. */
+    private static final long SCAN_MIN_BYTES = 3L * 1024 * 1024;
 
     private WebView web;
+    private WebViewPool.BridgeRelay relay;
+    private final Bridge bridge = new Bridge();
     private ProgressBar busy;
     private TextView titleView;
+    private TextView statusView;
     private final Handler ui = new Handler(Looper.getMainLooper());
     private final ExecutorService io = Executors.newSingleThreadExecutor();
+    private DeviceProfile device;
 
     // Current document
     private Uri docUri;               // null for a new, never-saved document
@@ -69,25 +81,26 @@ public class EditorActivity extends Activity {
     private String origExt;           // extension of the file on disk
     private String templateAsset;     // for new documents
     private boolean writable;
-    private DeviceProfile device;
     /** Local copy the editor reads from (large files, or the lighter copy). */
     private File localCopy;
     /** True when the editor holds a copy whose photos were resized. */
     private boolean lighterCopy;
     private boolean overwriteConfirmed;
-    private TextView statusView;
-    /** Files at least this big are copied and checked for oversized photos. */
-    private static final long SCAN_MIN_BYTES = 3L * 1024 * 1024;
     private final String docToken = UUID.randomUUID().toString();
 
+    private boolean hostReady;        // host.js is running in the WebView
+    private boolean docReady;         // the bytes to open are prepared
+    private boolean openSent;
     private boolean opened;
     private boolean dirty;
     private boolean saving;
+    private boolean resumed;
+    private Runnable whenResumed;     // a picker that must wait until we're in front
 
     /** A pending export from the editor, keyed by request id. */
     private static final class Job {
         final String id;
-        final String action;      // "save", "saveas", "pdf", "download"
+        final String action;      // "save", "saveas", "pdf", "download", "share"
         final String ext;         // extension of the file being produced
         boolean finishAfter;
         boolean wasDirty;
@@ -104,58 +117,113 @@ public class EditorActivity extends Activity {
     private final Map<String, Job> jobs = new ConcurrentHashMap<>();
     private final Map<String, OutputStream> streams = new HashMap<>();
     private Job awaitingCreate;
+    private Job pendingShare;
     private ValueCallback<Uri[]> fileChooserCallback;
+
+    /** Editors open in this process. On low-RAM phones they compete for one renderer. */
+    private static final List<WeakReference<EditorActivity>> LIVE = new ArrayList<>();
 
     private RecentStore recents() {
         return new RecentStore(this);
     }
 
-    @SuppressLint("SetJavaScriptEnabled")
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_editor);
-        web = findViewById(R.id.web);
         busy = findViewById(R.id.busy);
         titleView = findViewById(R.id.title);
         statusView = findViewById(R.id.status);
         device = DeviceProfile.detect(this);
         if (device.lowMemory) closeOtherCleanEditors();
-        LIVE.add(new java.lang.ref.WeakReference<>(this));
+        LIVE.add(new WeakReference<>(this));
 
         findViewById(R.id.btn_back).setOnClickListener(v -> onBackPressed());
         findViewById(R.id.btn_save).setOnClickListener(v -> save(false));
         findViewById(R.id.btn_more).setOnClickListener(this::showMenu);
 
-        if (!resolveDocument(getIntent())) {
+        Intent intent = getIntent();
+        String newType = intent.getStringExtra(EXTRA_NEW);
+        Uri uri = intent.getData();
+        if (uri == null && Intent.ACTION_SEND.equals(intent.getAction())) {
+            uri = intent.getParcelableExtra(Intent.EXTRA_STREAM);
+        }
+        if (newType == null && uri == null) {
+            Toast.makeText(this, "No file to open", Toast.LENGTH_LONG).show();
             finish();
             return;
         }
-        titleView.setText(docName);
+
+        // Start the editor shell right away (or take the pre-warmed one); it boots
+        // while the file is being looked at.
+        WebViewPool.register(docToken, this::openDocumentStream);
+        setUpWebView();
+        checkWebViewVersion();
         busy.setVisibility(View.VISIBLE);
 
-        boolean debuggable = (getApplicationInfo().flags & ApplicationInfo.FLAG_DEBUGGABLE) != 0;
-        WebView.setWebContentsDebuggingEnabled(debuggable);
+        if (newType != null) {
+            templateAsset = "templates/blank." + newType;
+            origExt = newType;
+            docName = (newType.equals("docx") ? "Document" : newType.equals("xlsx") ? "Spreadsheet" : "Presentation")
+                    + "." + newType;
+            titleView.setText(docName);
+            documentPrepared();
+            return;
+        }
 
-        WebSettings s = web.getSettings();
-        s.setJavaScriptEnabled(true);
-        s.setDomStorageEnabled(true);
-        s.setDatabaseEnabled(true);
-        s.setAllowFileAccess(false);
-        s.setAllowContentAccess(false);
-        s.setUseWideViewPort(true);
-        s.setLoadWithOverviewMode(false);
-        s.setSupportZoom(false);
-        s.setBuiltInZoomControls(false);
-        s.setDisplayZoomControls(false);
-        s.setTextZoom(100);
-        s.setMediaPlaybackRequiresUserGesture(false);
-        s.setJavaScriptCanOpenWindowsAutomatically(false);
-        s.setSupportMultipleWindows(false);
-        s.setCacheMode(WebSettings.LOAD_NO_CACHE);
+        // Provider queries can block (cloud files, slow storage): never on the UI thread.
+        docUri = uri;
+        titleView.setText(uri.getLastPathSegment());
+        final Uri target = uri;
+        final String type = intent.getType();
+        final int flags = intent.getFlags();
+        io.execute(() -> {
+            String name = queryName(target);
+            String ext = FileTypes.ext(name);
+            if (FileTypes.editorExt(ext).isEmpty()) {
+                String byMime = FileTypes.extForMime(type != null ? type : safeType(target));
+                if (!byMime.isEmpty()) {
+                    ext = byMime;
+                    name = FileTypes.baseName(name) + "." + byMime;
+                }
+            }
+            boolean canWrite = canWrite(target, flags);
+            long size = querySize(target);
+            final String fName = name, fExt = ext;
+            ui.post(() -> {
+                if (isFinishing()) return;
+                docName = fName;
+                origExt = fExt;
+                writable = canWrite;
+                titleView.setText(docName);
+                if (FileTypes.editorExt(origExt).isEmpty()) {
+                    Toast.makeText(this, "This file type isn't supported: " + docName, Toast.LENGTH_LONG).show();
+                    finish();
+                    return;
+                }
+                prepareLargeFile(size);
+            });
+        });
+    }
 
-        AssetServer server = new AssetServer(getAssets(), this::openDocumentStream, device.toJson());
-        web.addJavascriptInterface(new Bridge(), "AndroidBridge");
+    // ---------------------------------------------------------------- WebView
+
+    private void setUpWebView() {
+        web = WebViewPool.adopt(this);
+        boolean warm = web != null;
+        if (web == null) web = WebViewPool.create(this);
+        FrameLayout frame = findViewById(R.id.editor_frame);
+        if (web.getParent() instanceof ViewGroup) ((ViewGroup) web.getParent()).removeView(web);
+        frame.addView(web, 0, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+
+        relay = WebViewPool.relayOf(web);
+        if (relay != null) {
+            relay.target = bridge;
+            if (relay.hostReady) hostReady = true;
+        }
+
+        AssetServer server = WebViewPool.server(this);
         web.setWebViewClient(new WebViewClient() {
             @Override
             public WebResourceResponse shouldInterceptRequest(WebView view, WebResourceRequest request) {
@@ -180,11 +248,10 @@ public class EditorActivity extends Activity {
             public boolean onRenderProcessGone(WebView view, RenderProcessGoneDetail detail) {
                 Toast.makeText(EditorActivity.this,
                         "The editor ran out of memory and had to close.", Toast.LENGTH_LONG).show();
-                if (view.getParent() instanceof android.view.ViewGroup) {
-                    ((android.view.ViewGroup) view.getParent()).removeView(view);
-                }
+                if (view.getParent() instanceof ViewGroup) ((ViewGroup) view.getParent()).removeView(view);
                 view.destroy();
                 web = null;
+                SaveService.stop(EditorActivity.this);
                 finish();
                 return true;
             }
@@ -212,6 +279,7 @@ public class EditorActivity extends Activity {
             }
         });
         web.setDownloadListener((url, userAgent, contentDisposition, mimeType, length) -> {
+            if (origExt == null) return;
             String name = URLUtil.guessFileName(url, contentDisposition, mimeType);
             String ext = FileTypes.ext(name);
             if (ext.isEmpty() || ext.equals("bin")) {
@@ -230,13 +298,26 @@ public class EditorActivity extends Activity {
             if (saving) return;
             Job job = newJob("download", ext);
             job.suggestedName = name;
-            saving = true;
-            busy.setVisibility(View.VISIBLE);
+            beginExport(job);
             js("window.__op && window.__op.exportUrl(" + JSONObject.quote(job.id) + "," + JSONObject.quote(url) + ")");
         });
 
-        checkWebViewVersion();
-        prepareAndLoad();
+        if (!warm) web.loadUrl(AssetServer.ORIGIN + "/__android/host.html?standby=1");
+    }
+
+    /** The document's bytes are ready to be served; open as soon as the host page is too. */
+    private void documentPrepared() {
+        status(null);
+        updateTitle();
+        docReady = true;
+        maybeOpen();
+    }
+
+    private void maybeOpen() {
+        if (openSent || !docReady || !hostReady || web == null) return;
+        openSent = true;
+        String editorName = FileTypes.baseName(docName) + "." + FileTypes.editorExt(origExt);
+        js("window.__op.open(" + JSONObject.quote(docToken) + "," + JSONObject.quote(editorName) + ",false)");
     }
 
     // ---------------------------------------------------------------- large files
@@ -245,14 +326,9 @@ public class EditorActivity extends Activity {
      * Big Word / Excel / PowerPoint files are copied locally first and checked
      * for oversized photos; if they're photo-heavy we offer a lighter copy.
      */
-    private void prepareAndLoad() {
-        if (docUri == null || !ImageOptimizer.supports(origExt)) {
-            loadEditor();
-            return;
-        }
-        long size = querySize(docUri);
-        if (size >= 0 && size < SCAN_MIN_BYTES) {
-            loadEditor();
+    private void prepareLargeFile(long size) {
+        if (!ImageOptimizer.supports(origExt) || (size >= 0 && size < SCAN_MIN_BYTES)) {
+            documentPrepared();
             return;
         }
         status("Reading " + docName + "…");
@@ -265,11 +341,11 @@ public class EditorActivity extends Activity {
                     if (isFinishing()) return;
                     localCopy = copy;
                     if (scan.candidateBytes >= device.offerLighterCopyBytes) offerLighterCopy(scan);
-                    else loadEditor();
+                    else documentPrepared();
                 });
             } catch (Exception e) {
                 Log.w(TAG, "scan failed", e);
-                ui.post(this::loadEditor);
+                ui.post(this::documentPrepared);
             }
         });
     }
@@ -286,13 +362,13 @@ public class EditorActivity extends Activity {
         new AlertDialog.Builder(this)
                 .setTitle("Open a lighter copy?")
                 .setMessage(msg)
-                .setPositiveButton("Lighter copy", (d, w) -> optimizeThenLoad())
-                .setNegativeButton("Original", (d, w) -> loadEditor())
+                .setPositiveButton("Lighter copy", (d, w) -> optimizeThenOpen())
+                .setNegativeButton("Original", (d, w) -> documentPrepared())
                 .setCancelable(false)
                 .show();
     }
 
-    private void optimizeThenLoad() {
+    private void optimizeThenOpen() {
         status("Resizing pictures…");
         File src = localCopy;
         File out = new File(getCacheDir(), "light-" + docToken + "." + origExt);
@@ -313,28 +389,17 @@ public class EditorActivity extends Activity {
                         //noinspection ResultOfMethodCallIgnored
                         out.delete();
                     }
-                    updateTitle();
-                    loadEditor();
+                    documentPrepared();
                 });
             } catch (Exception e) {
                 Log.w(TAG, "optimize failed", e);
                 ui.post(() -> {
                     Toast.makeText(this, "Couldn't make a lighter copy; opening the original.",
                             Toast.LENGTH_LONG).show();
-                    loadEditor();
+                    documentPrepared();
                 });
             }
         });
-    }
-
-    private void loadEditor() {
-        if (web == null || isFinishing()) return;
-        status(null);
-        String editorName = FileTypes.baseName(docName) + "." + FileTypes.editorExt(origExt);
-        String url = AssetServer.ORIGIN + "/__android/host.html"
-                + "?doc=" + Uri.encode(docToken)
-                + "&name=" + Uri.encode(editorName);
-        web.loadUrl(url);
     }
 
     private void status(String text) {
@@ -346,21 +411,8 @@ public class EditorActivity extends Activity {
         }
     }
 
-    private long querySize(Uri uri) {
-        if ("file".equals(uri.getScheme())) return uri.getPath() != null ? new File(uri.getPath()).length() : -1;
-        try (Cursor c = getContentResolver().query(uri, new String[]{OpenableColumns.SIZE}, null, null, null)) {
-            if (c != null && c.moveToFirst() && !c.isNull(0)) return c.getLong(0);
-        } catch (Exception ignored) {
-        }
-        return -1;
-    }
-
-    /** Editors still open in other tasks. On low-RAM phones they share one WebView process. */
-    private static final java.util.List<java.lang.ref.WeakReference<EditorActivity>> LIVE =
-            new java.util.ArrayList<>();
-
     private void closeOtherCleanEditors() {
-        for (java.lang.ref.WeakReference<EditorActivity> ref : new java.util.ArrayList<>(LIVE)) {
+        for (WeakReference<EditorActivity> ref : new ArrayList<>(LIVE)) {
             EditorActivity other = ref.get();
             if (other == null || other.isFinishing()) {
                 LIVE.remove(ref);
@@ -371,44 +423,7 @@ public class EditorActivity extends Activity {
         }
     }
 
-    // ---------------------------------------------------------------- open
-
-    private boolean resolveDocument(Intent intent) {
-        String newType = intent.getStringExtra(EXTRA_NEW);
-        if (newType != null) {
-            templateAsset = "templates/blank." + newType;
-            origExt = newType;
-            docName = (newType.equals("docx") ? "Document" : newType.equals("xlsx") ? "Spreadsheet" : "Presentation")
-                    + "." + newType;
-            writable = false;
-            return true;
-        }
-
-        Uri uri = intent.getData();
-        if (uri == null && Intent.ACTION_SEND.equals(intent.getAction())) {
-            uri = intent.getParcelableExtra(Intent.EXTRA_STREAM);
-        }
-        if (uri == null) {
-            Toast.makeText(this, "No file to open", Toast.LENGTH_LONG).show();
-            return false;
-        }
-        docUri = uri;
-        docName = queryName(uri);
-        origExt = FileTypes.ext(docName);
-        if (FileTypes.editorExt(origExt).isEmpty()) {
-            String byMime = FileTypes.extForMime(intent.getType() != null ? intent.getType() : safeType(uri));
-            if (!byMime.isEmpty()) {
-                origExt = byMime;
-                docName = FileTypes.baseName(docName) + "." + byMime;
-            }
-        }
-        if (FileTypes.editorExt(origExt).isEmpty()) {
-            Toast.makeText(this, "This file type isn't supported: " + docName, Toast.LENGTH_LONG).show();
-            return false;
-        }
-        writable = canWrite(uri, intent);
-        return true;
-    }
+    // ---------------------------------------------------------------- provider queries (background)
 
     private String safeType(Uri uri) {
         try {
@@ -433,22 +448,33 @@ public class EditorActivity extends Activity {
         return name == null || name.trim().isEmpty() ? "Document" : name;
     }
 
-    private boolean canWrite(Uri uri, Intent intent) {
+    private long querySize(Uri uri) {
+        if ("file".equals(uri.getScheme())) return uri.getPath() != null ? new File(uri.getPath()).length() : -1;
+        try (Cursor c = getContentResolver().query(uri, new String[]{OpenableColumns.SIZE}, null, null, null)) {
+            if (c != null && c.moveToFirst() && !c.isNull(0)) return c.getLong(0);
+        } catch (Exception ignored) {
+        }
+        return -1;
+    }
+
+    private boolean canWrite(Uri uri, int intentFlags) {
         if ("file".equals(uri.getScheme())) {
             return uri.getPath() != null && new File(uri.getPath()).canWrite();
         }
-        if ((intent.getFlags() & Intent.FLAG_GRANT_WRITE_URI_PERMISSION) != 0) return true;
+        if ((intentFlags & Intent.FLAG_GRANT_WRITE_URI_PERMISSION) != 0) return true;
         if (checkCallingOrSelfUriPermission(uri, Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
                 == PackageManager.PERMISSION_GRANTED) return true;
-        for (android.content.UriPermission p : getContentResolver().getPersistedUriPermissions()) {
-            if (p.getUri().equals(uri) && p.isWritePermission()) return true;
+        try {
+            for (android.content.UriPermission p : getContentResolver().getPersistedUriPermissions()) {
+                if (p.getUri().equals(uri) && p.isWritePermission()) return true;
+            }
+        } catch (Exception ignored) {
         }
         return false;
     }
 
     /** Called on a WebView thread when the host page fetches /__doc/<token>. */
-    private InputStream openDocumentStream(String id) throws IOException {
-        if (!docToken.equals(id)) return null;
+    private InputStream openDocumentStream() throws IOException {
         if (templateAsset != null) return getAssets().open(templateAsset);
         if (localCopy != null && localCopy.exists()) return new FileInputStream(localCopy);
         return openOriginalStream();
@@ -464,6 +490,7 @@ public class EditorActivity extends Activity {
     // ---------------------------------------------------------------- menu & saving
 
     private void showMenu(View anchor) {
+        if (origExt == null) return;
         PopupMenu m = new PopupMenu(this, anchor);
         String modern = FileTypes.modernExt(origExt);
         m.getMenu().add(0, 1, 0, "Save");
@@ -560,9 +587,20 @@ public class EditorActivity extends Activity {
         startExport(newJob("share", FileTypes.canSaveInPlace(origExt) ? origExt : FileTypes.modernExt(origExt)));
     }
 
-    private void startExport(Job j) {
+    /**
+     * Marks the app busy for an export. While it runs, a foreground service and
+     * an "important" renderer keep Android from killing the editor if the user
+     * switches away.
+     */
+    private void beginExport(Job j) {
         saving = true;
         busy.setVisibility(View.VISIBLE);
+        SaveService.start(this, docName);
+        if (web != null) web.setRendererPriorityPolicy(WebView.RENDERER_PRIORITY_IMPORTANT, false);
+    }
+
+    private void startExport(Job j) {
+        beginExport(j);
         js("window.__op && window.__op.save(" + JSONObject.quote(j.id) + "," + JSONObject.quote(j.ext.toUpperCase()) + ")");
     }
 
@@ -572,24 +610,34 @@ public class EditorActivity extends Activity {
             case "save":
                 writeTo(j, docUri, () -> done(j, "Saved"), () -> {
                     // The original location refused the write; ask where to put it instead.
-                    Toast.makeText(this, "Can't write to the original file. Choose where to save it.", Toast.LENGTH_LONG).show();
                     writable = false;
-                    promptCreate(j, FileTypes.baseName(docName) + "." + j.ext);
+                    whenInFront(() -> {
+                        Toast.makeText(this, "Can't write to the original file. Choose where to save it.",
+                                Toast.LENGTH_LONG).show();
+                        promptCreate(j, FileTypes.baseName(docName) + "." + j.ext);
+                    });
                 });
                 break;
             case "saveas":
             case "pdf":
-                promptCreate(j, FileTypes.baseName(docName) + "." + j.ext);
+                whenInFront(() -> promptCreate(j, FileTypes.baseName(docName) + "." + j.ext));
                 break;
             case "download":
-                promptCreate(j, j.suggestedName != null ? j.suggestedName : FileTypes.baseName(docName) + "." + j.ext);
+                whenInFront(() -> promptCreate(j, j.suggestedName != null ? j.suggestedName
+                        : FileTypes.baseName(docName) + "." + j.ext));
                 break;
             case "share":
-                shareFile(j);
+                whenInFront(() -> shareFile(j));
                 break;
             default:
                 cleanup(j);
         }
+    }
+
+    /** Pickers can't be opened from the background; wait until the user is back. */
+    private void whenInFront(Runnable r) {
+        if (resumed) r.run();
+        else whenResumed = r;
     }
 
     private void promptCreate(Job j, String name) {
@@ -612,7 +660,7 @@ public class EditorActivity extends Activity {
             boolean success = false;
             String err = null;
             try (InputStream in = new FileInputStream(j.temp); OutputStream out = openOut(target)) {
-                byte[] buf = new byte[65536];
+                byte[] buf = new byte[256 * 1024];
                 int n;
                 while ((n = in.read(buf)) > 0) out.write(buf, 0, n);
                 out.flush();
@@ -664,12 +712,17 @@ public class EditorActivity extends Activity {
                 docUri = target;
                 templateAsset = null;
                 lighterCopy = false;
-                docName = queryName(target);
-                if (FileTypes.ext(docName).isEmpty()) docName = docName + "." + j.ext;
                 origExt = j.ext;
                 writable = true;
-                titleView.setText(docName);
-                recents().add(target.toString(), docName);
+                io.execute(() -> {
+                    String n = queryName(target);
+                    final String name = FileTypes.ext(n).isEmpty() ? n + "." + j.ext : n;
+                    ui.post(() -> {
+                        docName = name;
+                        updateTitle();
+                        recents().add(target.toString(), docName);
+                    });
+                });
                 done(j, "Saved");
             } else {
                 // An export (PDF or a download) doesn't save the document itself.
@@ -680,16 +733,13 @@ public class EditorActivity extends Activity {
     }
 
     private void shareFile(Job j) {
-        // Copy into a world-readable place via MediaStore-free route: our own provider isn't
-        // needed because the system share sheet accepts a file we write to a picked location.
-        // Simplest robust approach: let the user pick where to put the copy, then share that URI.
-        awaitingCreate = null;
-        Job copy = j;
+        // The share sheet needs a URI other apps can read; let the user pick where
+        // the copy goes, then share that.
+        pendingShare = j;
         Intent i = new Intent(Intent.ACTION_CREATE_DOCUMENT);
         i.addCategory(Intent.CATEGORY_OPENABLE);
         i.setType(FileTypes.mimeForExt(j.ext));
         i.putExtra(Intent.EXTRA_TITLE, FileTypes.baseName(docName) + "." + j.ext);
-        pendingShare = copy;
         try {
             startActivityForResult(i, REQ_SHARE_TARGET);
         } catch (ActivityNotFoundException e) {
@@ -697,9 +747,6 @@ public class EditorActivity extends Activity {
             fail(j, "No app available to save files");
         }
     }
-
-    private static final int REQ_SHARE_TARGET = 12;
-    private Job pendingShare;
 
     private void onShareTarget(Uri target) {
         Job j = pendingShare;
@@ -735,16 +782,17 @@ public class EditorActivity extends Activity {
     private void fail(Job j, String message) {
         if (j != null) {
             if (j.wasDirty) dirty = true;
+            j.finishAfter = false;
             cleanup(j);
         } else {
             saving = false;
             busy.setVisibility(View.GONE);
         }
-        new AlertDialog.Builder(this)
+        whenInFront(() -> new AlertDialog.Builder(this)
                 .setTitle("Couldn't save")
                 .setMessage(message)
                 .setPositiveButton(android.R.string.ok, null)
-                .show();
+                .show());
     }
 
     private void cleanup(Job j) {
@@ -753,15 +801,35 @@ public class EditorActivity extends Activity {
             j.temp.delete();
         saving = false;
         busy.setVisibility(opened ? View.GONE : View.VISIBLE);
+        if (jobs.isEmpty()) {
+            SaveService.stop(this);
+            if (web != null) web.setRendererPriorityPolicy(WebView.RENDERER_PRIORITY_IMPORTANT, true);
+        }
         updateTitle();
     }
 
     private void updateTitle() {
+        if (docName == null) return;
         String t = lighterCopy ? docName + " (lighter copy)" : docName;
         titleView.setText(dirty ? "• " + t : t);
     }
 
     // ---------------------------------------------------------------- activity plumbing
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        resumed = true;
+        Runnable r = whenResumed;
+        whenResumed = null;
+        if (r != null) r.run();
+    }
+
+    @Override
+    protected void onPause() {
+        resumed = false;
+        super.onPause();
+    }
 
     @Override
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
@@ -792,7 +860,16 @@ public class EditorActivity extends Activity {
     @Override
     public void onBackPressed() {
         if (saving) {
-            Toast.makeText(this, "Saving…", Toast.LENGTH_SHORT).show();
+            // An in-place save needs no more input: let it finish in the background.
+            Job inPlace = null;
+            for (Job j : jobs.values()) if (j.action.equals("save")) inPlace = j;
+            if (inPlace != null) {
+                inPlace.finishAfter = true;
+                Toast.makeText(this, "Saving " + docName + " in the background…", Toast.LENGTH_SHORT).show();
+                moveTaskToBack(true);
+            } else {
+                Toast.makeText(this, "Saving…", Toast.LENGTH_SHORT).show();
+            }
             return;
         }
         if (!dirty || !opened) {
@@ -809,12 +886,15 @@ public class EditorActivity extends Activity {
 
     @Override
     protected void onDestroy() {
+        WebViewPool.unregister(docToken);
+        if (relay != null) relay.target = null;
         if (web != null) {
             web.stopLoading();
             web.setWebChromeClient(null);
             web.destroy();
             web = null;
         }
+        if (!jobs.isEmpty()) SaveService.stop(this);
         if (localCopy != null) {
             File f = localCopy;
             io.execute(() -> {
@@ -848,20 +928,26 @@ public class EditorActivity extends Activity {
         }
     }
 
-    // ---------------------------------------------------------------- JS bridge
+    // ---------------------------------------------------------------- bridge from the page
 
-    private final class Bridge {
-        @JavascriptInterface
-        public void onOpened() {
+    /** Called through {@link WebViewPool.BridgeRelay} (JS threads) and {@link BinaryChannel} (UI thread). */
+    final class Bridge {
+        void hostReady() {
             ui.post(() -> {
-                opened = true;
-                busy.setVisibility(saving ? View.VISIBLE : View.GONE);
-                if (docUri != null) recents().add(docUri.toString(), docName);
+                hostReady = true;
+                maybeOpen();
             });
         }
 
-        @JavascriptInterface
-        public void onError(String message) {
+        void onOpened() {
+            ui.post(() -> {
+                opened = true;
+                busy.setVisibility(saving ? View.VISIBLE : View.GONE);
+                if (docUri != null && docName != null) recents().add(docUri.toString(), docName);
+            });
+        }
+
+        void onError(String message) {
             ui.post(() -> {
                 busy.setVisibility(View.GONE);
                 if (isFinishing()) return;
@@ -874,16 +960,16 @@ public class EditorActivity extends Activity {
             });
         }
 
-        @JavascriptInterface
-        public void onDirty(boolean value) {
+        void onDirty(boolean value) {
             ui.post(() -> {
                 dirty = value;
                 updateTitle();
             });
         }
 
-        @JavascriptInterface
-        public void exportBegin(String id) {
+        // -- base64 path (any WebView), called on a JS thread, in order
+
+        void exportBegin(String id) {
             synchronized (streams) {
                 try {
                     Job j = jobs.get(id);
@@ -896,23 +982,11 @@ public class EditorActivity extends Activity {
             }
         }
 
-        @JavascriptInterface
-        public void exportChunk(String id, String base64) {
-            synchronized (streams) {
-                OutputStream out = streams.get(id);
-                if (out == null) return;
-                try {
-                    out.write(Base64.decode(base64, Base64.DEFAULT));
-                } catch (Exception e) {
-                    Log.w(TAG, "exportChunk", e);
-                    try { out.close(); } catch (IOException ignored) { }
-                    streams.remove(id);
-                }
-            }
+        void exportChunk(String id, String base64) {
+            write(id, Base64.decode(base64, Base64.DEFAULT));
         }
 
-        @JavascriptInterface
-        public void exportEnd(String id, boolean stillDirty) {
+        void exportEnd(String id, boolean stillDirty) {
             OutputStream out;
             synchronized (streams) {
                 out = streams.remove(id);
@@ -939,8 +1013,7 @@ public class EditorActivity extends Activity {
             });
         }
 
-        @JavascriptInterface
-        public void exportFailed(String id, String message) {
+        void exportFailed(String id, String message) {
             synchronized (streams) {
                 OutputStream out = streams.remove(id);
                 if (out != null) try { out.close(); } catch (IOException ignored) { }
@@ -951,9 +1024,26 @@ public class EditorActivity extends Activity {
             });
         }
 
-        @JavascriptInterface
-        public void log(String message) {
-            Log.d(TAG, "[host] " + message);
+        private void write(String id, byte[] data) {
+            synchronized (streams) {
+                OutputStream out = streams.get(id);
+                if (out == null) return;
+                try {
+                    out.write(data);
+                } catch (IOException e) {
+                    Log.w(TAG, "export write", e);
+                    try { out.close(); } catch (IOException ignored) { }
+                    streams.remove(id);
+                }
+            }
         }
+
+        // -- binary path (androidx.webkit), called on the UI thread; file I/O moved
+        //    to the ordered background executor
+
+        void binaryBegin(String id) { io.execute(() -> exportBegin(id)); }
+        void binaryChunk(String id, byte[] data) { io.execute(() -> write(id, data)); }
+        void binaryEnd(String id, boolean stillDirty) { io.execute(() -> exportEnd(id, stillDirty)); }
+        void binaryFailed(String id, String message) { io.execute(() -> exportFailed(id, message)); }
     }
 }

@@ -48,15 +48,12 @@
             android:src="@drawable/ic_more" />
     </LinearLayout>
 
+    <!-- The editor WebView is added here in code (it may arrive pre-warmed). -->
     <FrameLayout
+        android:id="@+id/editor_frame"
         android:layout_width="match_parent"
         android:layout_height="0dp"
         android:layout_weight="1">
-
-        <WebView
-            android:id="@+id/web"
-            android:layout_width="match_parent"
-            android:layout_height="match_parent" />
 
         <TextView
             android:id="@+id/status"

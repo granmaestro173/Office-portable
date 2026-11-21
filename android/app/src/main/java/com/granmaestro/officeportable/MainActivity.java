@@ -22,6 +22,7 @@ public class MainActivity extends Activity {
     private static final int REQ_OPEN = 1;
 
     private RecentStore recents;
+    private final java.util.concurrent.ExecutorService bg = java.util.concurrent.Executors.newSingleThreadExecutor();
     private final List<RecentStore.Entry> items = new ArrayList<>();
     private RecentAdapter adapter;
     private TextView emptyView;
@@ -54,13 +55,21 @@ public class MainActivity extends Activity {
     protected void onResume() {
         super.onResume();
         refresh();
+        // Start the editor process and boot an editor shell while the user picks a file.
+        WarmupService.warm(this);
     }
 
     private void refresh() {
-        items.clear();
-        items.addAll(recents.list());
-        emptyView.setVisibility(items.isEmpty() ? View.VISIBLE : View.GONE);
-        adapter.notifyDataSetChanged();
+        bg.execute(() -> {
+            List<RecentStore.Entry> fresh = recents.list();
+            runOnUiThread(() -> {
+                if (isFinishing()) return;
+                items.clear();
+                items.addAll(fresh);
+                emptyView.setVisibility(items.isEmpty() ? View.VISIBLE : View.GONE);
+                adapter.notifyDataSetChanged();
+            });
+        });
     }
 
     private void setupTile(View tile, String letter, int color, String label, String newType) {
@@ -116,16 +125,51 @@ public class MainActivity extends Activity {
     }
 
     private void openRecent(RecentStore.Entry e) {
-        openUri(Uri.parse(e.uri));
+        open(Uri.parse(e.uri), "pdf".equals(FileTypes.ext(e.name)));
     }
 
+    /** Picked files: find out whether it's a PDF without blocking the UI thread. */
     private void openUri(Uri uri) {
-        Intent i = new Intent(this, EditorActivity.class);
+        bg.execute(() -> {
+            boolean pdf;
+            try {
+                pdf = "application/pdf".equals(getContentResolver().getType(uri));
+            } catch (Exception e) {
+                pdf = false;
+            }
+            if (!pdf) {
+                String last = uri.getLastPathSegment();
+                pdf = last != null && last.toLowerCase(java.util.Locale.ROOT).endsWith(".pdf");
+            }
+            final boolean isPdf = pdf;
+            runOnUiThread(() -> open(uri, isPdf));
+        });
+    }
+
+    private void open(Uri uri, boolean pdf) {
+        Class<?> target = pdf ? PdfViewerActivity.class : EditorActivity.class;
+        Intent i = new Intent(this, target);
         i.setAction(Intent.ACTION_EDIT);
         i.setData(uri);
         i.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
         i.addFlags(Intent.FLAG_ACTIVITY_NEW_DOCUMENT);
-        startActivity(i);
+        try {
+            startActivity(i);
+        } catch (SecurityException noWrite) {
+            // We only hold read access to this file; pass on what we have.
+            i.setFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_ACTIVITY_NEW_DOCUMENT);
+            try {
+                startActivity(i);
+            } catch (SecurityException gone) {
+                Toast.makeText(this, "This file is no longer available.", Toast.LENGTH_LONG).show();
+            }
+        }
+    }
+
+    @Override
+    protected void onDestroy() {
+        bg.shutdown();
+        super.onDestroy();
     }
 
     private final class RecentAdapter extends BaseAdapter {
@@ -147,10 +191,10 @@ public class MainActivity extends Activity {
                     DateUtils.getRelativeTimeSpanString(e.time, System.currentTimeMillis(), DateUtils.MINUTE_IN_MILLIS));
             ImageButton remove = v.findViewById(R.id.remove);
             remove.setFocusable(false);
-            remove.setOnClickListener(x -> {
+            remove.setOnClickListener(x -> bg.execute(() -> {
                 recents.remove(e.uri);
-                refresh();
-            });
+                runOnUiThread(MainActivity.this::refresh);
+            }));
             return v;
         }
     }

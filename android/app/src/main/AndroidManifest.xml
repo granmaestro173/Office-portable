@@ -1,6 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
+    <!-- Keeps a save running if the user switches apps mid-save (SaveService). -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+
     <application
         android:allowBackup="false"
         android:icon="@mipmap/ic_launcher"
@@ -21,8 +25,11 @@
             </intent-filter>
         </activity>
 
+        <!-- The editor runs in its own process: its memory use can't take the
+             home screen or the PDF viewer down, and it can be warmed up ahead of time. -->
         <activity
             android:name=".EditorActivity"
+            android:process=":editor"
             android:exported="true"
             android:documentLaunchMode="intoExisting"
             android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboard|keyboardHidden|navigation|uiMode|density"
@@ -57,7 +64,6 @@
                 <data android:mimeType="application/vnd.openxmlformats-officedocument.presentationml.template" />
                 <data android:mimeType="application/vnd.ms-powerpoint" />
                 <data android:mimeType="application/vnd.oasis.opendocument.presentation" />
-                <data android:mimeType="application/pdf" />
             </intent-filter>
 
             <!-- Apps that send files as "application/octet-stream": match by extension -->
@@ -91,5 +97,37 @@
                 <data android:mimeType="text/rtf" />
             </intent-filter>
         </activity>
+        <!-- Fast native PDF viewer; "Edit" hands over to the editor. -->
+        <activity
+            android:name=".PdfViewerActivity"
+            android:exported="true"
+            android:documentLaunchMode="intoExisting"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden"
+            android:theme="@style/EditorTheme">
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="content" />
+                <data android:scheme="file" />
+                <data android:mimeType="application/pdf" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="application/pdf" />
+            </intent-filter>
+        </activity>
+
+        <service
+            android:name=".WarmupService"
+            android:process=":editor"
+            android:exported="false" />
+
+        <service
+            android:name=".SaveService"
+            android:process=":editor"
+            android:foregroundServiceType="dataSync"
+            android:exported="false" />
     </application>
 </manifest>

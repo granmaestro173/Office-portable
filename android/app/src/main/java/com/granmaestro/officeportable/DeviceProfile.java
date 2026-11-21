@@ -23,7 +23,9 @@ final class DeviceProfile {
     private DeviceProfile(boolean lowMemory, long totalRamBytes) {
         this.lowMemory = lowMemory;
         this.totalRamBytes = totalRamBytes;
-        this.converterIdleMs = lowMemory ? 1500 : 4000;
+        // Restarting the converter costs ~0.6-0.9 s per save (measured, 6x slowed CPU),
+        // so keep it longer where memory allows; low-RAM phones still free it fast.
+        this.converterIdleMs = lowMemory ? 5000 : 20000;
         this.photoMaxDim = lowMemory ? 1600 : 2048;
         this.offerLighterCopyBytes = (lowMemory ? 4L : 10L) * 1024 * 1024;
     }
@@ -47,6 +49,7 @@ final class DeviceProfile {
         try {
             o.put("lowMemory", lowMemory);
             o.put("x2tIdleMs", converterIdleMs);
+            o.put("binarySave", BinaryChannel.supported());
         } catch (JSONException ignored) {
         }
         return o.toString();

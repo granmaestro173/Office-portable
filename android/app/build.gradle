@@ -55,3 +55,8 @@ android {
         jniLibs { useLegacyPackaging false }
     }
 }
+
+dependencies {
+    // Raw ArrayBuffer messages from the page (binary save path).
+    implementation 'androidx.webkit:webkit:1.12.1'
+}

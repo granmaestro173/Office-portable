@@ -1,4 +1,7 @@
 // Host page: owns the editor iframe and relays between it and the Android app.
+// Two ways in:
+//   host.html?doc=<token>&name=<file>   open that document right away
+//   host.html?standby=1                 boot the editor shell, wait for __op.open()
 (function () {
   'use strict';
 
@@ -8,11 +11,17 @@
     exportBegin: function () {}, exportChunk: function () {}, exportEnd: function () {},
     exportFailed: function (id, m) { console.error(m); }, log: function (m) { console.log(m); },
   };
+  var config = window.__OP_CONFIG || {};
+  // Raw-bytes channel (androidx.webkit) when the WebView supports ArrayBuffer messages.
+  var binary = config.binarySave && window.AndroidSave && typeof window.AndroidSave.postMessage === 'function'
+    ? window.AndroidSave : null;
 
   var params = new URLSearchParams(location.search);
-  var docId = params.get('doc');
-  var fileName = params.get('name') || 'Document.docx';
-  var readonly = params.get('ro') === '1';
+  var pendingDoc = params.get('doc') ? {
+    id: params.get('doc'),
+    name: params.get('name') || 'Document.docx',
+    readonly: params.get('ro') === '1',
+  } : null;
 
   var frame = document.getElementById('ed');
   var statusEl = document.getElementById('status');
@@ -57,20 +66,23 @@
   function onReady() {
     if (ready) return;
     ready = true;
-    openDocument();
+    if (pendingDoc) openDocument();
   }
 
   function openDocument() {
-    if (openStarted) return;
+    if (openStarted || !pendingDoc) return;
     openStarted = true;
-    status('Opening ' + fileName + '…');
-    fetch('/__doc/' + encodeURIComponent(docId), { cache: 'no-store' })
+    var doc = pendingDoc;
+    status('Opening ' + doc.name + '…');
+    fetch('/__doc/' + encodeURIComponent(doc.id), { cache: 'no-store' })
       .then(function (r) {
         if (!r.ok) throw new Error('Could not read the file (' + r.status + ')');
-        return r.arrayBuffer();
+        // A Blob, not an ArrayBuffer: large bodies can stay out of the JS heap,
+        // and the editor accepts it as-is (document:open-file).
+        return r.blob();
       })
-      .then(function (buffer) {
-        return send('document:open-buffer', { fileName: fileName, buffer: buffer, readonly: readonly }, [buffer]);
+      .then(function (blob) {
+        return send('document:open-file', { blob: blob, fileName: doc.name, readonly: doc.readonly });
       })
       .then(function () {
         status(null);
@@ -82,8 +94,30 @@
       });
   }
 
-  // Streams a Blob to the app in base64 chunks.
-  function streamToApp(id, blob, dirty) {
+  // ---- exports back to the app ------------------------------------------
+
+  // Binary path: 1 MB ArrayBuffer chunks, no encoding.
+  function streamBinary(id, blob, dirty) {
+    var CHUNK = 1024 * 1024;
+    var offset = 0;
+    binary.postMessage('b|' + id);
+    function next() {
+      if (offset >= blob.size) {
+        binary.postMessage('e|' + id + '|' + (dirty ? '1' : '0'));
+        return Promise.resolve();
+      }
+      var slice = blob.slice(offset, offset + CHUNK);
+      offset += CHUNK;
+      return slice.arrayBuffer().then(function (buf) {
+        binary.postMessage(buf);
+        return next();
+      });
+    }
+    return next();
+  }
+
+  // Fallback: base64 strings through @JavascriptInterface.
+  function streamBase64(id, blob, dirty) {
     var CHUNK = 768 * 1024; // multiple of 3, so chunks encode independently
     var offset = 0;
     bridge.exportBegin(id);
@@ -108,30 +142,42 @@
     return next();
   }
 
+  function streamToApp(id, blob, dirty) {
+    return binary ? streamBinary(id, blob, dirty) : streamBase64(id, blob, dirty);
+  }
+
+  function fail(id, err) {
+    var msg = String((err && err.message) || err);
+    if (binary) binary.postMessage('f|' + id + '|' + msg);
+    else bridge.exportFailed(id, msg);
+  }
+
   window.__op = {
+    open: function (id, name, ro) {
+      pendingDoc = { id: id, name: name, readonly: !!ro };
+      if (ready) openDocument();
+    },
     save: function (id, targetExt) {
       send('document:save', targetExt ? { targetExt: targetExt } : {})
         .then(function (payload) {
           if (!payload.file) throw new Error('The editor returned no file');
           return streamToApp(id, payload.file, payload.dirty);
         })
-        .catch(function (err) {
-          bridge.exportFailed(id, String((err && err.message) || err));
-        });
+        .catch(function (err) { fail(id, err); });
     },
     exportUrl: function (id, url) {
       fetch(url)
         .then(function (r) { return r.blob(); })
         .then(function (blob) { return streamToApp(id, blob, null); })
-        .catch(function (err) {
-          bridge.exportFailed(id, String((err && err.message) || err));
-        });
+        .catch(function (err) { fail(id, err); });
     },
   };
 
+  if (!pendingDoc) status(null);
+  if (typeof bridge.hostReady === 'function') bridge.hostReady();
   frame.src = '/editor?embed=1&embedOrigin=' + encodeURIComponent(location.origin);
   // If the ready message was missed, open anyway once the frame has loaded.
   frame.addEventListener('load', function () {
-    setTimeout(function () { if (!ready) { bridge.log('no document:ready, opening anyway'); onReady(); } }, 4000);
+    setTimeout(function () { if (!ready) { bridge.log('no document:ready, assuming ready'); onReady(); } }, 4000);
   });
 })();
