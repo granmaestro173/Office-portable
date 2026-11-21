@@ -244,7 +244,7 @@ public class PdfViewerActivity extends Activity {
                 }
             }
             ui.post(() -> onOpened(n, a));
-        } catch (SecurityException | IOException | RuntimeException e) {
+        } catch (IOException | RuntimeException e) {
             // Password-protected or something PdfRenderer can't read: the editor can.
             ui.post(() -> openInEditor("Opening in the editor…"));
         }
