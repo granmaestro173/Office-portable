@@ -32,10 +32,12 @@ final class AssetServer {
 
     private final AssetManager assets;
     private final DocumentSource documents;
+    private final String configJson;
 
-    AssetServer(AssetManager assets, DocumentSource documents) {
+    AssetServer(AssetManager assets, DocumentSource documents, String configJson) {
         this.assets = assets;
         this.documents = documents;
+        this.configJson = configJson;
     }
 
     WebResourceResponse handle(Uri url) {
@@ -48,6 +50,9 @@ final class AssetServer {
                 InputStream in = documents.open(path.substring("/__doc/".length()));
                 if (in == null) return notFound();
                 return respond("application/octet-stream", in);
+            }
+            if (path.equals("/__android/shim.js")) {
+                return serveShim();
             }
             if (path.startsWith("/__android/")) {
                 return serveAsset("shell/" + path.substring("/__android/".length()));
@@ -80,6 +85,18 @@ final class AssetServer {
             in = injectShim(in);
         }
         return respond(mime, in);
+    }
+
+    /** The shim, prefixed with this device's settings (read by the patched editor). */
+    private WebResourceResponse serveShim() throws IOException {
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        out.write(("window.__OP_CONFIG = " + configJson + ";\n").getBytes(StandardCharsets.UTF_8));
+        try (InputStream in = assets.open("shell/shim.js")) {
+            byte[] buf = new byte[8192];
+            int n;
+            while ((n = in.read(buf)) > 0) out.write(buf, 0, n);
+        }
+        return respond("text/javascript", new ByteArrayInputStream(out.toByteArray()));
     }
 
     private static InputStream injectShim(InputStream in) throws IOException {

@@ -69,6 +69,15 @@ public class EditorActivity extends Activity {
     private String origExt;           // extension of the file on disk
     private String templateAsset;     // for new documents
     private boolean writable;
+    private DeviceProfile device;
+    /** Local copy the editor reads from (large files, or the lighter copy). */
+    private File localCopy;
+    /** True when the editor holds a copy whose photos were resized. */
+    private boolean lighterCopy;
+    private boolean overwriteConfirmed;
+    private TextView statusView;
+    /** Files at least this big are copied and checked for oversized photos. */
+    private static final long SCAN_MIN_BYTES = 3L * 1024 * 1024;
     private final String docToken = UUID.randomUUID().toString();
 
     private boolean opened;
@@ -109,6 +118,10 @@ public class EditorActivity extends Activity {
         web = findViewById(R.id.web);
         busy = findViewById(R.id.busy);
         titleView = findViewById(R.id.title);
+        statusView = findViewById(R.id.status);
+        device = DeviceProfile.detect(this);
+        if (device.lowMemory) closeOtherCleanEditors();
+        LIVE.add(new java.lang.ref.WeakReference<>(this));
 
         findViewById(R.id.btn_back).setOnClickListener(v -> onBackPressed());
         findViewById(R.id.btn_save).setOnClickListener(v -> save(false));
@@ -141,7 +154,7 @@ public class EditorActivity extends Activity {
         s.setSupportMultipleWindows(false);
         s.setCacheMode(WebSettings.LOAD_NO_CACHE);
 
-        AssetServer server = new AssetServer(getAssets(), this::openDocumentStream);
+        AssetServer server = new AssetServer(getAssets(), this::openDocumentStream, device.toJson());
         web.addJavascriptInterface(new Bridge(), "AndroidBridge");
         web.setWebViewClient(new WebViewClient() {
             @Override
@@ -223,12 +236,139 @@ public class EditorActivity extends Activity {
         });
 
         checkWebViewVersion();
+        prepareAndLoad();
+    }
 
+    // ---------------------------------------------------------------- large files
+
+    /**
+     * Big Word / Excel / PowerPoint files are copied locally first and checked
+     * for oversized photos; if they're photo-heavy we offer a lighter copy.
+     */
+    private void prepareAndLoad() {
+        if (docUri == null || !ImageOptimizer.supports(origExt)) {
+            loadEditor();
+            return;
+        }
+        long size = querySize(docUri);
+        if (size >= 0 && size < SCAN_MIN_BYTES) {
+            loadEditor();
+            return;
+        }
+        status("Reading " + docName + "…");
+        io.execute(() -> {
+            try {
+                File copy = new File(getCacheDir(), "open-" + docToken + "." + origExt);
+                ImageOptimizer.copy(openOriginalStream(), copy);
+                ImageOptimizer.Scan scan = ImageOptimizer.scan(copy);
+                ui.post(() -> {
+                    if (isFinishing()) return;
+                    localCopy = copy;
+                    if (scan.candidateBytes >= device.offerLighterCopyBytes) offerLighterCopy(scan);
+                    else loadEditor();
+                });
+            } catch (Exception e) {
+                Log.w(TAG, "scan failed", e);
+                ui.post(this::loadEditor);
+            }
+        });
+    }
+
+    private void offerLighterCopy(ImageOptimizer.Scan scan) {
+        status(null);
+        String msg = "This file is " + ImageOptimizer.mb(scan.fileBytes) + ", mostly " + scan.candidates
+                + " large picture" + (scan.candidates == 1 ? "" : "s") + ".\n\n"
+                + "A lighter copy resizes them to screen size (" + device.photoMaxDim + " px). "
+                + "It opens and saves much faster and needs far less memory"
+                + (device.lowMemory ? ", which matters on this phone" : "") + ". "
+                + "Pictures may look softer when zoomed in or printed large.\n\n"
+                + "Your original file isn't changed unless you choose to save over it.";
+        new AlertDialog.Builder(this)
+                .setTitle("Open a lighter copy?")
+                .setMessage(msg)
+                .setPositiveButton("Lighter copy", (d, w) -> optimizeThenLoad())
+                .setNegativeButton("Original", (d, w) -> loadEditor())
+                .setCancelable(false)
+                .show();
+    }
+
+    private void optimizeThenLoad() {
+        status("Resizing pictures…");
+        File src = localCopy;
+        File out = new File(getCacheDir(), "light-" + docToken + "." + origExt);
+        io.execute(() -> {
+            try {
+                ImageOptimizer.Result r = ImageOptimizer.optimize(src, out, device.photoMaxDim,
+                        (done, total) -> ui.post(() -> status("Resizing pictures… " + done + " of " + total)));
+                ui.post(() -> {
+                    if (isFinishing()) return;
+                    if (r.resized > 0 && r.after < r.before) {
+                        //noinspection ResultOfMethodCallIgnored
+                        src.delete();
+                        localCopy = out;
+                        lighterCopy = true;
+                        Toast.makeText(this, "Lighter copy: " + ImageOptimizer.mb(r.before) + " → "
+                                + ImageOptimizer.mb(r.after), Toast.LENGTH_LONG).show();
+                    } else {
+                        //noinspection ResultOfMethodCallIgnored
+                        out.delete();
+                    }
+                    updateTitle();
+                    loadEditor();
+                });
+            } catch (Exception e) {
+                Log.w(TAG, "optimize failed", e);
+                ui.post(() -> {
+                    Toast.makeText(this, "Couldn't make a lighter copy; opening the original.",
+                            Toast.LENGTH_LONG).show();
+                    loadEditor();
+                });
+            }
+        });
+    }
+
+    private void loadEditor() {
+        if (web == null || isFinishing()) return;
+        status(null);
         String editorName = FileTypes.baseName(docName) + "." + FileTypes.editorExt(origExt);
         String url = AssetServer.ORIGIN + "/__android/host.html"
                 + "?doc=" + Uri.encode(docToken)
                 + "&name=" + Uri.encode(editorName);
         web.loadUrl(url);
+    }
+
+    private void status(String text) {
+        if (text == null) {
+            statusView.setVisibility(View.GONE);
+        } else {
+            statusView.setText(text);
+            statusView.setVisibility(View.VISIBLE);
+        }
+    }
+
+    private long querySize(Uri uri) {
+        if ("file".equals(uri.getScheme())) return uri.getPath() != null ? new File(uri.getPath()).length() : -1;
+        try (Cursor c = getContentResolver().query(uri, new String[]{OpenableColumns.SIZE}, null, null, null)) {
+            if (c != null && c.moveToFirst() && !c.isNull(0)) return c.getLong(0);
+        } catch (Exception ignored) {
+        }
+        return -1;
+    }
+
+    /** Editors still open in other tasks. On low-RAM phones they share one WebView process. */
+    private static final java.util.List<java.lang.ref.WeakReference<EditorActivity>> LIVE =
+            new java.util.ArrayList<>();
+
+    private void closeOtherCleanEditors() {
+        for (java.lang.ref.WeakReference<EditorActivity> ref : new java.util.ArrayList<>(LIVE)) {
+            EditorActivity other = ref.get();
+            if (other == null || other.isFinishing()) {
+                LIVE.remove(ref);
+            } else if (!other.dirty && !other.saving) {
+                other.finishAndRemoveTask();
+                LIVE.remove(ref);
+            }
+        }
     }
 
     // ---------------------------------------------------------------- open
@@ -310,6 +450,11 @@ public class EditorActivity extends Activity {
     private InputStream openDocumentStream(String id) throws IOException {
         if (!docToken.equals(id)) return null;
         if (templateAsset != null) return getAssets().open(templateAsset);
+        if (localCopy != null && localCopy.exists()) return new FileInputStream(localCopy);
+        return openOriginalStream();
+    }
+
+    private InputStream openOriginalStream() throws IOException {
         if ("file".equals(docUri.getScheme())) return new FileInputStream(docUri.getPath());
         InputStream in = getContentResolver().openInputStream(docUri);
         if (in == null) throw new FileNotFoundException("Can't read " + docName);
@@ -375,6 +520,20 @@ public class EditorActivity extends Activity {
 
     private void save(boolean finishAfter) {
         if (!ready()) return;
+        if (lighterCopy && !overwriteConfirmed && docUri != null && writable && FileTypes.canSaveInPlace(origExt)) {
+            new AlertDialog.Builder(this)
+                    .setTitle("Save the lighter copy?")
+                    .setMessage("The pictures in this copy were resized. Saving over " + docName
+                            + " replaces the full-size pictures in the original.")
+                    .setPositiveButton("Save as new file", (d, w) -> saveAs(origExt, finishAfter))
+                    .setNegativeButton("Overwrite original", (d, w) -> {
+                        overwriteConfirmed = true;
+                        save(finishAfter);
+                    })
+                    .setNeutralButton(android.R.string.cancel, null)
+                    .show();
+            return;
+        }
         if (docUri != null && writable && FileTypes.canSaveInPlace(origExt)) {
             Job j = newJob("save", origExt);
             j.finishAfter = finishAfter;
@@ -504,6 +663,7 @@ public class EditorActivity extends Activity {
                 }
                 docUri = target;
                 templateAsset = null;
+                lighterCopy = false;
                 docName = queryName(target);
                 if (FileTypes.ext(docName).isEmpty()) docName = docName + "." + j.ext;
                 origExt = j.ext;
@@ -597,7 +757,8 @@ public class EditorActivity extends Activity {
     }
 
     private void updateTitle() {
-        titleView.setText(dirty ? "• " + docName : docName);
+        String t = lighterCopy ? docName + " (lighter copy)" : docName;
+        titleView.setText(dirty ? "• " + t : t);
     }
 
     // ---------------------------------------------------------------- activity plumbing
@@ -653,6 +814,13 @@ public class EditorActivity extends Activity {
             web.setWebChromeClient(null);
             web.destroy();
             web = null;
+        }
+        if (localCopy != null) {
+            File f = localCopy;
+            io.execute(() -> {
+                //noinspection ResultOfMethodCallIgnored
+                f.delete();
+            });
         }
         io.shutdown();
         super.onDestroy();

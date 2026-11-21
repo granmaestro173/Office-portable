@@ -31,7 +31,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: android/app/src/main/assets/www
-          key: editor-bundle-${{ steps.editor.outputs.ref }}-${{ hashFiles('scripts/build-editor.sh') }}
+          key: editor-bundle-${{ steps.editor.outputs.ref }}-${{ hashFiles('scripts/**') }}
 
       - name: Set up Node.js
         if: steps.bundle-cache.outputs.cache-hit != 'true'

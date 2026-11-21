@@ -40,6 +40,32 @@ Requires Android 8.0 or newer and an up-to-date **Android System WebView**
 On phones the editor uses ONLYOFFICE's desktop toolbar, adapted for narrow screens.
 It is roomiest on tablets or a phone in landscape.
 
+## Large files and low-memory phones
+
+The editor engine is heavy. Even an empty document uses about 370 MB inside the
+WebView, and a 78 MB photo slideshow used to peak at about 1.6 GB while saving.
+The app reduces that in three ways:
+
+- **Lighter copy for photo-heavy files.** When a Word, Excel or PowerPoint file has
+  large photos (over 4 MB of them on phones with 3 GB of RAM or less, over 10 MB
+  otherwise), the app offers to open a copy with the photos resized to screen size
+  (1600 px on low-RAM phones, 2048 px otherwise). Layout is untouched, and only the
+  picture bytes change. Saving over the original asks for confirmation first.
+  Measured on a 16-photo, 78 MB presentation:
+
+  | | File | Open peak | Save peak | Save time |
+  |---|---|---|---|---|
+  | Original | 78 MB | 1316 MB | 1652 MB | 6.8 s |
+  | Lighter copy, 2048 px | 10.6 MB | 703 MB | 815 MB | 1.4 s |
+  | Lighter copy, 1600 px | 5.7 MB | 655 MB | 695 MB | 1.1 s |
+
+- **The file converter is shut down right after use.** It needs 300 MB or more while
+  it runs, and upstream keeps it for 30 s after every open and save. The app shuts it
+  down after 1.5 s on low-RAM phones (4 s otherwise). It restarts in under a second
+  when you next save.
+- **One editor at a time on low-RAM phones.** All open editors share one WebView
+  process, so opening a file closes other editors that have no unsaved changes.
+
 ## Known limitations
 
 - **Spell check is off.** The upstream bundle disables it because its engine could
@@ -51,8 +77,8 @@ It is roomiest on tablets or a phone in landscape.
 - **Some `.odp` files** fail to open with "Document conversion failed". This is a
   converter limitation. Other `.odp` files open and save normally.
 - **Very large files** (hundreds of pages, or spreadsheets with hundreds of thousands
-  of cells) can exhaust the memory of low-end phones. The app then closes the editor
-  and tells you.
+  of cells) can still exhaust the memory of low-end phones. The app then closes the
+  editor and tells you.
 - Unsaved edits are lost if Android kills the app in the background, so save before
   switching away for long.
 

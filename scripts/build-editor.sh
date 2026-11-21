@@ -18,6 +18,8 @@ git -C "$WORK" remote add origin "$EDITOR_REPO"
 git -C "$WORK" fetch -q --depth 1 origin "$EDITOR_REF"
 git -C "$WORK" checkout -q FETCH_HEAD
 
+python3 "$ROOT/scripts/patch-editor.py" "$WORK"
+
 (
   cd "$WORK"
   pnpm install --frozen-lockfile
