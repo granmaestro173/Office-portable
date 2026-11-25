@@ -138,6 +138,7 @@ final class AssetServer {
     }
 
     private static WebResourceResponse error(Exception e) {
+        android.util.Log.w("OfficePortable", "request failed", e);
         String msg = String.valueOf(e.getMessage());
         return new WebResourceResponse("text/plain", "utf-8", 500, "Error", headers(),
                 new ByteArrayInputStream(msg.getBytes(StandardCharsets.UTF_8)));

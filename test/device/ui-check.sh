@@ -22,8 +22,11 @@ adb shell wm size | tee -a "$OUT/webview.txt"
 adb shell am start -W -n "$PKG/.MainActivity" >/dev/null
 shot 01-home-empty 6
 
+# The app has created its own folder by now (MainActivity), so files pushed
+# into it are readable by the app.
 adb shell mkdir -p "$D"
 adb push test/fixtures/. "$D/" >/dev/null
+adb shell ls -ln "$D" "$D/.." | tee "$OUT/files.txt"
 adb push test/device/pinch.sh /data/local/tmp/pinch.sh >/dev/null
 adb shell chmod 755 /data/local/tmp/pinch.sh
 
@@ -76,5 +79,5 @@ adb shell input swipe $CX $((H * 85 / 100)) $CX $((H * 25 / 100)) 300
 shot 13-launcher 4
 
 adb logcat -d > "$OUT/logcat.txt"
-grep -iE "AndroidRuntime|FATAL|officeportable|chromium.*(Uncaught|Error)" "$OUT/logcat.txt" | tail -200 > "$OUT/logcat-errors.txt" || true
+grep -E "AndroidRuntime|FATAL|OfficePortable:|chromium.*(Uncaught|Error)" "$OUT/logcat.txt" | tail -200 > "$OUT/logcat-errors.txt" || true
 ls -la "$OUT"

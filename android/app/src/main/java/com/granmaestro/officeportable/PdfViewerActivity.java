@@ -238,6 +238,7 @@ public class PdfViewerActivity extends Activity {
             }
             ui.post(() -> onOpened(n, a));
         } catch (IOException | RuntimeException e) {
+            android.util.Log.w("OfficePortable", "PdfRenderer failed", e);
             // Password-protected or something PdfRenderer can't read: the editor can.
             ui.post(() -> openInEditor("Opening in the editor…"));
         }

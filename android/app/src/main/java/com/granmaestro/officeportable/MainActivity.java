@@ -39,6 +39,9 @@ public class MainActivity extends Activity {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
         recents = new RecentStore(this);
+        // Create the app's own folder in shared storage (Android/data/<app>/files)
+        // so it belongs to the app; the emulator test copies sample files there.
+        bg.execute(() -> getExternalFilesDir(null));
 
         ListView list = findViewById(R.id.list);
         View header = LayoutInflater.from(this).inflate(R.layout.main_header, list, false);
