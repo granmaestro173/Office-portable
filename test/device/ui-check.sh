@@ -53,6 +53,14 @@ adb shell input swipe $CX $((H * 45 / 100)) $CX $((H * 70 / 100)) 300
 sleep 3
 adb shell input tap $CX $CY
 shot 06-pptx-selected 3
+# Control: a raw one-finger swipe up should move to slide 2 ("swipe to slide 2" in the log)...
+adb shell /data/local/tmp/pinch.sh $CX $CY 0 600 10 2>&1 | tee -a "$OUT/pinch.txt"
+sleep 3
+# ...and an input-command swipe brings it back.
+adb shell input swipe $CX $((H * 45 / 100)) $CX $((H * 70 / 100)) 300
+sleep 3
+adb shell input tap $CX $CY
+sleep 2
 adb shell /data/local/tmp/pinch.sh $CX $CY 200 700 14 2>&1 | tee -a "$OUT/pinch.txt"
 shot 07-pptx-pinched 4
 # Two-finger pinch back out.
