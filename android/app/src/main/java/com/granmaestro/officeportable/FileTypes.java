@@ -160,6 +160,17 @@ final class FileTypes {
         }
     }
 
+    /** File-type icon (see scripts/gen-icons.py). */
+    static int icon(String ext) {
+        switch (kind(ext)) {
+            case "word": return R.drawable.ic_file_word;
+            case "cell": return R.drawable.ic_file_cell;
+            case "slide": return R.drawable.ic_file_slide;
+            case "pdf": return R.drawable.ic_file_pdf;
+            default: return R.drawable.ic_file_other;
+        }
+    }
+
     static int color(String ext) {
         switch (kind(ext)) {
             case "word": return 0xFF2B579A;

@@ -31,7 +31,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: android/app/src/main/assets/www
-          key: editor-bundle-${{ steps.editor.outputs.ref }}-${{ hashFiles('scripts/**') }}
+          key: editor-bundle-${{ steps.editor.outputs.ref }}-${{ hashFiles('scripts/build-editor.sh', 'scripts/patch-editor.py', 'scripts/fill-font-faces.py') }}
 
       - name: Set up Node.js
         if: steps.bundle-cache.outputs.cache-hit != 'true'
@@ -107,3 +107,46 @@ jobs:
             --title "Office Portable $OP_VERSION_NAME" \
             --notes "Download the APK below and open it on your Android phone or tablet to install. Built from ${GITHUB_SHA::7}." \
             --target "$GITHUB_SHA"
+
+  # Installs the APK on an Android 14 emulator, walks through the main screens
+  # (including a real two-finger pinch in a presentation) and keeps screenshots.
+  # Informational: it never blocks the release above.
+  screens:
+    needs: apk
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    continue-on-error: true
+    env:
+      OP_VERSION_NAME: 1.0.${{ github.run_number }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: OfficePortable-${{ env.OP_VERSION_NAME }}
+          path: apk
+
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Run on emulator
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 34
+          target: google_apis
+          arch: x86_64
+          profile: pixel_6
+          ram-size: 4096M
+          disk-size: 6000M
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
+          disable-animations: true
+          script: test/device/ui-check.sh "$(ls apk/*.apk | head -1)"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: screens-${{ env.OP_VERSION_NAME }}
+          path: screens/

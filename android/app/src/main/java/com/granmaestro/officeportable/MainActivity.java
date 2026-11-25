@@ -2,7 +2,6 @@ package com.granmaestro.officeportable;
 
 import android.app.Activity;
 import android.content.Intent;
-import android.graphics.drawable.GradientDrawable;
 import android.net.Uri;
 import android.os.Bundle;
 import android.text.format.DateUtils;
@@ -11,6 +10,9 @@ import android.view.View;
 import android.view.ViewGroup;
 import android.widget.BaseAdapter;
 import android.widget.ImageButton;
+import android.widget.ImageView;
+import android.widget.LinearLayout;
+import android.widget.PopupMenu;
 import android.widget.ListView;
 import android.widget.TextView;
 import android.widget.Toast;
@@ -23,9 +25,14 @@ public class MainActivity extends Activity {
 
     private RecentStore recents;
     private final java.util.concurrent.ExecutorService bg = java.util.concurrent.Executors.newSingleThreadExecutor();
+    private final List<RecentStore.Entry> all = new ArrayList<>();
     private final List<RecentStore.Entry> items = new ArrayList<>();
     private RecentAdapter adapter;
-    private TextView emptyView;
+    private View emptyView;
+    private TextView emptyTitle, emptyHint;
+    private final List<TextView> chips = new ArrayList<>();
+    /** "" = all, else a FileTypes.kind(). */
+    private String filter = "";
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -37,11 +44,14 @@ public class MainActivity extends Activity {
         View header = LayoutInflater.from(this).inflate(R.layout.main_header, list, false);
         list.addHeaderView(header, null, false);
         emptyView = header.findViewById(R.id.empty);
+        emptyTitle = header.findViewById(R.id.empty_title);
+        emptyHint = header.findViewById(R.id.empty_hint);
 
-        setupTile(header.findViewById(R.id.new_doc), "W", 0xFF2B579A, getString(R.string.new_doc), "docx");
-        setupTile(header.findViewById(R.id.new_sheet), "X", 0xFF217346, getString(R.string.new_sheet), "xlsx");
-        setupTile(header.findViewById(R.id.new_slides), "P", 0xFFC43E1C, getString(R.string.new_slides), "pptx");
+        setupTile(header.findViewById(R.id.new_doc), R.drawable.ic_new_word, R.drawable.tile_word, R.string.new_doc, "docx");
+        setupTile(header.findViewById(R.id.new_sheet), R.drawable.ic_new_cell, R.drawable.tile_excel, R.string.new_sheet, "xlsx");
+        setupTile(header.findViewById(R.id.new_slides), R.drawable.ic_new_slide, R.drawable.tile_ppt, R.string.new_slides, "pptx");
         header.findViewById(R.id.open_file).setOnClickListener(v -> pickFile());
+        setupFilters(header.findViewById(R.id.filters));
 
         adapter = new RecentAdapter();
         list.setAdapter(adapter);
@@ -64,19 +74,18 @@ public class MainActivity extends Activity {
             List<RecentStore.Entry> fresh = recents.list();
             runOnUiThread(() -> {
                 if (isFinishing()) return;
-                items.clear();
-                items.addAll(fresh);
-                emptyView.setVisibility(items.isEmpty() ? View.VISIBLE : View.GONE);
-                adapter.notifyDataSetChanged();
+                all.clear();
+                all.addAll(fresh);
+                applyFilter();
             });
         });
     }
 
-    private void setupTile(View tile, String letter, int color, String label, String newType) {
-        TextView badge = tile.findViewById(R.id.badge);
-        badge.setText(letter);
-        badge.setBackground(rounded(color, 10));
+    private void setupTile(View tile, int icon, int background, int label, String newType) {
+        tile.setBackgroundResource(background);
+        ((ImageView) tile.findViewById(R.id.icon)).setImageResource(icon);
         ((TextView) tile.findViewById(R.id.label)).setText(label);
+        tile.setContentDescription(getString(R.string.create_new) + ": " + getString(label));
         tile.setOnClickListener(v -> {
             Intent i = new Intent(this, EditorActivity.class);
             i.putExtra(EditorActivity.EXTRA_NEW, newType);
@@ -85,11 +94,74 @@ public class MainActivity extends Activity {
         });
     }
 
-    private GradientDrawable rounded(int color, int radiusDp) {
-        GradientDrawable d = new GradientDrawable();
-        d.setColor(color);
-        d.setCornerRadius(radiusDp * getResources().getDisplayMetrics().density);
-        return d;
+    private void setupFilters(LinearLayout row) {
+        String[] kinds = {"", "word", "cell", "slide", "pdf"};
+        int[] labels = {R.string.filter_all, R.string.filter_docs, R.string.filter_sheets,
+                R.string.filter_slides, R.string.filter_pdf};
+        for (int i = 0; i < kinds.length; i++) {
+            TextView chip = (TextView) getLayoutInflater().inflate(R.layout.chip, row, false);
+            chip.setText(labels[i]);
+            final String kind = kinds[i];
+            chip.setTag(kind);
+            chip.setSelected(kind.equals(filter));
+            chip.setOnClickListener(v -> {
+                filter = kind;
+                for (TextView c : chips) c.setSelected(kind.equals(c.getTag()));
+                applyFilter();
+            });
+            chips.add(chip);
+            row.addView(chip);
+        }
+    }
+
+    private void applyFilter() {
+        items.clear();
+        for (RecentStore.Entry e : all) {
+            if (filter.isEmpty() || filter.equals(FileTypes.kind(FileTypes.ext(e.name)))) items.add(e);
+        }
+        boolean empty = items.isEmpty();
+        emptyView.setVisibility(empty ? View.VISIBLE : View.GONE);
+        if (empty) {
+            boolean filtered = !filter.isEmpty() && !all.isEmpty();
+            emptyTitle.setText(R.string.no_recent);
+            emptyHint.setText(filtered ? R.string.no_recent_filtered : R.string.no_recent_hint);
+        }
+        adapter.notifyDataSetChanged();
+    }
+
+    private void showItemMenu(View anchor, RecentStore.Entry e) {
+        PopupMenu m = new PopupMenu(this, anchor);
+        m.getMenu().add(0, 1, 0, R.string.open);
+        m.getMenu().add(0, 2, 1, R.string.share);
+        m.getMenu().add(0, 3, 2, R.string.remove_recent);
+        m.setOnMenuItemClickListener(item -> {
+            switch (item.getItemId()) {
+                case 1: openRecent(e); return true;
+                case 2: share(e); return true;
+                case 3:
+                    bg.execute(() -> {
+                        recents.remove(e.uri);
+                        runOnUiThread(this::refresh);
+                    });
+                    return true;
+            }
+            return false;
+        });
+        m.show();
+    }
+
+    private void share(RecentStore.Entry e) {
+        Uri uri = Uri.parse(e.uri);
+        Intent send = new Intent(Intent.ACTION_SEND);
+        String mime = FileTypes.mimeForExt(FileTypes.ext(e.name));
+        send.setType(mime != null ? mime : "application/octet-stream");
+        send.putExtra(Intent.EXTRA_STREAM, uri);
+        send.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+        try {
+            startActivity(Intent.createChooser(send, e.name));
+        } catch (Exception ex) {
+            Toast.makeText(this, "Couldn't share this file.", Toast.LENGTH_LONG).show();
+        }
     }
 
     private void pickFile() {
@@ -183,18 +255,15 @@ public class MainActivity extends Activity {
                     : LayoutInflater.from(MainActivity.this).inflate(R.layout.recent_item, parent, false);
             RecentStore.Entry e = items.get(position);
             String ext = FileTypes.ext(e.name);
-            TextView badge = v.findViewById(R.id.badge);
-            badge.setText(ext.isEmpty() ? "?" : ext.toUpperCase());
-            badge.setBackground(rounded(FileTypes.color(ext), 8));
+            ((ImageView) v.findViewById(R.id.icon)).setImageResource(FileTypes.icon(ext));
             ((TextView) v.findViewById(R.id.name)).setText(e.name);
+            CharSequence when = DateUtils.getRelativeTimeSpanString(e.time, System.currentTimeMillis(),
+                    DateUtils.MINUTE_IN_MILLIS);
             ((TextView) v.findViewById(R.id.when)).setText(
-                    DateUtils.getRelativeTimeSpanString(e.time, System.currentTimeMillis(), DateUtils.MINUTE_IN_MILLIS));
-            ImageButton remove = v.findViewById(R.id.remove);
-            remove.setFocusable(false);
-            remove.setOnClickListener(x -> bg.execute(() -> {
-                recents.remove(e.uri);
-                runOnUiThread(MainActivity.this::refresh);
-            }));
+                    ext.isEmpty() ? when : ext.toUpperCase(java.util.Locale.ROOT) + "  ·  " + when);
+            ImageButton menu = v.findViewById(R.id.menu);
+            menu.setFocusable(false);
+            menu.setOnClickListener(x -> showItemMenu(x, e));
             return v;
         }
     }

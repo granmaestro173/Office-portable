@@ -1,14 +1,25 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <color name="brand">#2B5797</color>
-    <color name="bg">#F4F5F7</color>
+    <color name="brand">#2457B3</color>
+    <color name="brand2">#3B7BE0</color>
+    <color name="bg">#F5F7FB</color>
     <color name="card">#FFFFFF</color>
-    <color name="text">#1C1E21</color>
-    <color name="text2">#5F6368</color>
-    <color name="divider">#E0E2E6</color>
+    <color name="surface2">#EDF1F7</color>
+    <color name="text">#1B1F24</color>
+    <color name="text2">#5E6673</color>
+    <color name="divider">#E2E6EE</color>
     <color name="bar">#FFFFFF</color>
-    <color name="word">#2B579A</color>
-    <color name="excel">#217346</color>
-    <color name="ppt">#C43E1C</color>
-    <color name="pdf">#B30B00</color>
+    <color name="canvas">#E6E9EF</color>
+    <color name="chip_on_bg">#DCE7FA</color>
+    <color name="chip_on_text">#1A4A9C</color>
+
+    <!-- File types: the icon color and a soft container behind it. -->
+    <color name="word">#2B5FB4</color>
+    <color name="excel">#1E7B4A</color>
+    <color name="ppt">#C9481F</color>
+    <color name="pdf">#D0302A</color>
+    <color name="word_bg">#E8EFFB</color>
+    <color name="excel_bg">#E3F3E9</color>
+    <color name="ppt_bg">#FCEDE6</color>
+    <color name="pdf_bg">#FCE9E8</color>
 </resources>

@@ -11,3 +11,11 @@
     }
   } catch (e) {}
 })();
+
+// Presentation editor: phone gestures (pinch zoom, pan). See gestures.js.
+(function () {
+  if (!/\/presentationeditor\/main\//.test(location.pathname)) return;
+  var s = document.createElement('script');
+  s.src = '/__android/gestures.js';
+  (document.head || document.documentElement).appendChild(s);
+})();

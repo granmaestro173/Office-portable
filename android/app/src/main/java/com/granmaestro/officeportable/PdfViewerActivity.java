@@ -21,7 +21,6 @@ import android.view.View;
 import android.view.ViewGroup;
 import android.widget.AbsListView;
 import android.widget.BaseAdapter;
-import android.widget.Button;
 import android.widget.FrameLayout;
 import android.widget.HorizontalScrollView;
 import android.widget.ImageButton;
@@ -100,29 +99,23 @@ public class PdfViewerActivity extends Activity {
         root.setFitsSystemWindows(true);
         root.setBackgroundColor(getColor(R.color.bar));
 
-        LinearLayout bar = new LinearLayout(this);
-        bar.setGravity(Gravity.CENTER_VERTICAL);
-        ImageButton back = new ImageButton(this);
-        back.setImageResource(R.drawable.ic_back);
-        back.setBackgroundResource(android.R.color.transparent);
-        back.setContentDescription(getString(R.string.back));
-        back.setOnClickListener(v -> finish());
-        bar.addView(back, new LinearLayout.LayoutParams(dp(48), dp(48)));
-        TextView title = new TextView(this);
-        title.setId(android.R.id.title);
-        title.setSingleLine(true);
-        title.setEllipsize(android.text.TextUtils.TruncateAt.MIDDLE);
-        title.setTextColor(getColor(R.color.text));
-        title.setTextSize(16);
-        bar.addView(title, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
-        Button edit = new Button(this, null, android.R.attr.borderlessButtonStyle);
-        edit.setText("Edit");
+        View bar = getLayoutInflater().inflate(R.layout.top_bar, root, false);
+        ((ImageView) bar.findViewById(R.id.type_icon)).setImageResource(R.drawable.ic_file_pdf);
+        bar.findViewById(R.id.btn_back).setOnClickListener(v -> finish());
+        // No save here; the second action opens the full editor.
+        bar.findViewById(R.id.btn_save).setVisibility(View.GONE);
+        ImageButton edit = bar.findViewById(R.id.btn_more);
+        edit.setImageResource(R.drawable.ic_edit);
+        edit.setContentDescription(getString(R.string.edit));
         edit.setOnClickListener(v -> openInEditor(null));
-        bar.addView(edit, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(48)));
-        root.addView(bar, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(48)));
+        edit.setOnLongClickListener(v -> {
+            Toast.makeText(this, R.string.edit, Toast.LENGTH_SHORT).show();
+            return true;
+        });
+        root.addView(bar);
 
         FrameLayout content = new FrameLayout(this);
-        content.setBackgroundColor(0xFF9AA0A6);
+        content.setBackgroundColor(getColor(R.color.canvas));
         hscroll = new HorizontalScrollView(this);
         hscroll.setFillViewport(true);
         list = new ListView(this);
@@ -139,8 +132,8 @@ public class PdfViewerActivity extends Activity {
         pageLabel = new TextView(this);
         pageLabel.setTextColor(Color.WHITE);
         pageLabel.setTextSize(13);
-        pageLabel.setPadding(dp(10), dp(4), dp(10), dp(4));
-        pageLabel.setBackgroundColor(0x99000000);
+        pageLabel.setPadding(dp(14), dp(6), dp(14), dp(6));
+        pageLabel.setBackgroundResource(R.drawable.pill_bg);
         pageLabel.setVisibility(View.GONE);
         FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL);
@@ -265,7 +258,7 @@ public class PdfViewerActivity extends Activity {
         if (isFinishing()) return;
         name = docName;
         aspect = pageAspect;
-        ((TextView) findViewById(android.R.id.title)).setText(name);
+        ((TextView) findViewById(R.id.title)).setText(name);
         busy.setVisibility(View.GONE);
         list.setAdapter(new PageAdapter());
         new RecentStore(this).add(uri.toString(), name);

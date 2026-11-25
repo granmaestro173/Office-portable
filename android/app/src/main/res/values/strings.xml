@@ -1,15 +1,28 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">Office Portable</string>
+    <string name="tagline">Documents, sheets and slides, offline</string>
     <string name="create_new">Create new</string>
     <string name="new_doc">Document</string>
     <string name="new_sheet">Spreadsheet</string>
     <string name="new_slides">Presentation</string>
     <string name="open_file">Open a file</string>
-    <string name="open_hint">Word, Excel, PowerPoint, OpenDocument, RTF, CSV, TXT and PDF</string>
+    <string name="open_hint">Word, Excel, PowerPoint, PDF and more</string>
     <string name="recent">Recent</string>
-    <string name="no_recent">Files you open will show up here.</string>
+    <string name="no_recent">No recent files</string>
+    <string name="no_recent_hint">Files you open or create show up here.</string>
+    <string name="no_recent_filtered">No files of this type yet.</string>
+    <string name="filter_all">All</string>
+    <string name="filter_docs">Documents</string>
+    <string name="filter_sheets">Spreadsheets</string>
+    <string name="filter_slides">Presentations</string>
+    <string name="filter_pdf">PDF</string>
+    <string name="file_options">File options</string>
+    <string name="open">Open</string>
+    <string name="share">Share</string>
+    <string name="remove_recent">Remove from recent</string>
     <string name="save">Save</string>
     <string name="back">Back</string>
     <string name="more">More options</string>
+    <string name="edit">Edit</string>
 </resources>

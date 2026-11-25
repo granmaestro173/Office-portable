@@ -166,7 +166,7 @@ public class EditorActivity extends Activity {
             origExt = newType;
             docName = (newType.equals("docx") ? "Document" : newType.equals("xlsx") ? "Spreadsheet" : "Presentation")
                     + "." + newType;
-            titleView.setText(docName);
+            updateTitle();
             documentPrepared();
             return;
         }
@@ -195,7 +195,7 @@ public class EditorActivity extends Activity {
                 docName = fName;
                 origExt = fExt;
                 writable = canWrite;
-                titleView.setText(docName);
+                updateTitle();
                 if (FileTypes.editorExt(origExt).isEmpty()) {
                     Toast.makeText(this, "This file type isn't supported: " + docName, Toast.LENGTH_LONG).show();
                     finish();
@@ -812,6 +812,7 @@ public class EditorActivity extends Activity {
         if (docName == null) return;
         String t = lighterCopy ? docName + " (lighter copy)" : docName;
         titleView.setText(dirty ? "• " + t : t);
+        ((android.widget.ImageView) findViewById(R.id.type_icon)).setImageResource(FileTypes.icon(FileTypes.ext(docName)));
     }
 
     // ---------------------------------------------------------------- activity plumbing
