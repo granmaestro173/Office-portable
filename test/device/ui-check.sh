@@ -51,10 +51,10 @@ adb shell input swipe $CX $((H * 45 / 100)) $CX $((H * 70 / 100)) 300
 sleep 3
 adb shell input tap $CX $CY
 shot 06-pptx-selected 3
-adb shell /data/local/tmp/pinch.sh $CX $CY 200 700 14
+adb shell /data/local/tmp/pinch.sh $CX $CY 200 700 14 | tee -a "$OUT/pinch.txt"
 shot 07-pptx-pinched 4
 # Two-finger pinch back out.
-adb shell /data/local/tmp/pinch.sh $CX $CY 700 250 14
+adb shell /data/local/tmp/pinch.sh $CX $CY 700 250 14 | tee -a "$OUT/pinch.txt"
 shot 08-pptx-pinched-out 4
 back
 
@@ -79,5 +79,5 @@ adb shell input swipe $CX $((H * 85 / 100)) $CX $((H * 25 / 100)) 300
 shot 13-launcher 4
 
 adb logcat -d > "$OUT/logcat.txt"
-grep -E "AndroidRuntime|FATAL|OfficePortable:|chromium.*(Uncaught|Error)" "$OUT/logcat.txt" | tail -200 > "$OUT/logcat-errors.txt" || true
+grep -E "AndroidRuntime|FATAL|OfficePortable:|chromium.*(Uncaught|Error)" "$OUT/logcat.txt" | tail -400 > "$OUT/logcat-errors.txt" || true
 ls -la "$OUT"

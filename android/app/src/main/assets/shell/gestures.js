@@ -175,6 +175,7 @@
     var wc = control();
     if (!a || !wc) return;
     z = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, Math.round(z)));
+    console.log('[gestures] zoom ' + zoomValue() + ' -> ' + z);
     var slide = currentSlide();
     if (z !== zoomValue()) a.zoom(z);
     if (!p || p.Page < 0) return;
@@ -342,6 +343,7 @@
       var a = api();
       if (dir && a && a.goToPage) {
         var next = Math.max(0, Math.min(a.getCountPages() - 1, p.slide0 + dir));
+        console.log('[gestures] swipe to slide ' + (next + 1));
         if (next !== p.slide0) a.goToPage(next);
       }
       return;
@@ -522,6 +524,7 @@
     }
   }
 
+  console.log('[gestures] ready');
   var opts = { capture: true, passive: false };
   window.addEventListener('pointerdown', onDown, opts);
   window.addEventListener('pointermove', onMove, opts);

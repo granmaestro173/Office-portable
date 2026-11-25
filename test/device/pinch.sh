@@ -3,7 +3,12 @@
 #   pinch.sh <cx> <cy> <start_gap> <end_gap> [steps]     (screen pixels)
 # end_gap > start_gap zooms in.
 CX=$1; CY=$2; G0=$3; G1=$4; STEPS=${5:-12}
-DEV=$(getevent -pl 2>/dev/null | awk '/add device/{d=$4} /ABS_MT_POSITION_X/{print d; exit}')
+# The emulator has one multi-touch device per possible display; use the one
+# for the main display ("..._multi_touch_1" or the first one listed by name).
+LIST=$(getevent -pl 2>/dev/null | awk '/add device/{d=$4} /name:/{n=$2} /ABS_MT_POSITION_X/{print d, n}')
+echo "$LIST" | sed 's/^/  touch device: /'
+DEV=$(echo "$LIST" | awk '$2 ~ /multi_touch_1"$/ || $2 ~ /multi_touch"$/ {print $1; exit}')
+[ -z "$DEV" ] && DEV=$(echo "$LIST" | head -1 | awk '{print $1}')
 [ -z "$DEV" ] && { echo "no multi-touch device"; exit 1; }
 MAXX=$(getevent -pl "$DEV" | grep ABS_MT_POSITION_X | sed 's/.*max \([0-9]*\).*/\1/')
 MAXY=$(getevent -pl "$DEV" | grep ABS_MT_POSITION_Y | sed 's/.*max \([0-9]*\).*/\1/')
