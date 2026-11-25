@@ -14,6 +14,8 @@ view() { # file mime activity
 }
 back() { adb shell input keyevent KEYCODE_BACK; sleep 2; }
 
+# Root, so pinch.sh can write raw touch events (google_apis images allow it).
+adb root >/dev/null 2>&1; sleep 3; adb wait-for-device
 adb shell dumpsys webviewupdate | grep -i "current webview package" | tee "$OUT/webview.txt"
 adb install -r -g "$APK" || exit 1
 adb shell cmd uimode night no
@@ -51,10 +53,10 @@ adb shell input swipe $CX $((H * 45 / 100)) $CX $((H * 70 / 100)) 300
 sleep 3
 adb shell input tap $CX $CY
 shot 06-pptx-selected 3
-adb shell /data/local/tmp/pinch.sh $CX $CY 200 700 14 | tee -a "$OUT/pinch.txt"
+adb shell /data/local/tmp/pinch.sh $CX $CY 200 700 14 2>&1 | tee -a "$OUT/pinch.txt"
 shot 07-pptx-pinched 4
 # Two-finger pinch back out.
-adb shell /data/local/tmp/pinch.sh $CX $CY 700 250 14 | tee -a "$OUT/pinch.txt"
+adb shell /data/local/tmp/pinch.sh $CX $CY 700 250 14 2>&1 | tee -a "$OUT/pinch.txt"
 shot 08-pptx-pinched-out 4
 back
 
