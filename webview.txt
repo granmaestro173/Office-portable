@@ -1,0 +1,2 @@
+  Current WebView package (name, version): (com.google.android.webview, 113.0.5672.136)
+Physical size: 1080x2400

@@ -1,0 +1,10 @@
+/sdcard/Android/data/com.granmaestro.officeportable/files:
+total 104
+-rw-r--r-- 1 0 0  5078 2026-11-25 19:35 budget.xlsx
+-rw-r--r-- 1 0 0 36403 2026-11-25 19:35 deck.pptx
+-rw-r--r-- 1 0 0  3442 2026-11-25 19:35 guide.pdf
+-rw-r--r-- 1 0 0 36880 2026-11-25 19:35 report.docx
+
+/sdcard/Android/data/com.granmaestro.officeportable/files/..:
+total 8
+drwxrws--- 2 10192 1078 4096 2026-11-25 19:37 files
